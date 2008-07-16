@@ -66,7 +66,7 @@
 (require 'advice)
 
 (defvar elisp-cache-version 
-  (let ((svn-revision "$Revision: 1$"))
+  (let ((svn-revision "$Revision$"))
     (string-match "\\$Revision: \\([0-9]+\\)\\$" svn-revision)
     (match-string 1 svn-revision))
 "Version number for elisp-cache.el, taken from the Subversion revision")
