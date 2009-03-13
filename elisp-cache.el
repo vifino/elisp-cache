@@ -65,14 +65,18 @@
 (require 'custom)
 (require 'advice)
 
-(defvar elisp-cache-version 1.4
+;;;;;;;;;;;;;;;;;;;; Configurable stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defvar elisp-cache-version 1.6
 "Version number for elisp-cache.el, taken from the Subversion revision")
+
 
 (defgroup elisp-cache nil
   "Cache for Elisp files (eg from a slow file server)"
   :group 'environment
   :group 'convenience
   :prefix "elisp-cache-")
+
 
 (defcustom elisp-cache-freshness-delay (* 24 60)
   "The maximum time (in minutes) before we check for changes in the file server.
@@ -98,13 +102,15 @@ this variable, as the cache might misbehave if there is a mixture of .el and
   :group 'elisp-cache)
 
 
-(defun elisp-cache-walk-dir (dirname func &rest args)
+;;;;;;;;;;;;;;;;;;;; Internal functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defun elisp-cache/walk-dir (dirname func &rest args)
   "Walk recursively through DIRNAME.
 
 Invoke FUNC DIRNAME f ARGS on each file underneath it, where f is the *relative*
 pathname with respect to DIRNAME."
-  (elisp-cache-walk-dir-internal dirname "" func args))
-(defun elisp-cache-walk-dir-internal (dir file func args)
+  (elisp-cache/do-walk-dir dirname "" func args))
+(defun elisp-cache/do-walk-dir (dir file func args)
   (let ((fullpath (expand-file-name file dir)))
 ;   (message "Examining file or directory %s in dir %s" file dir)
     (cond
@@ -117,11 +123,11 @@ pathname with respect to DIRNAME."
             (let* ((subdir (if (string-equal file "") ""
                              (file-name-as-directory file)))
                    (subpath (concat subdir f)))
-              (elisp-cache-walk-dir-internal dir subpath
-                                             func args))))))))
+              (elisp-cache/do-walk-dir dir subpath
+                                       func args))))))))
 
 
-(defun elisp-cache-get-mtimes (dirname)
+(defun elisp-cache/get-mtimes (dirname)
   "Returns a hash table of mtimes for .el and .elc files under DIRNAME.
 
 DIRNAME is searched recursively for files ending in .el or .elc.  The keys in
@@ -129,7 +135,7 @@ the returned hash table are paths relative to DIRNAME.  The values in the hash
 table are timestamps as produced by the `time-date' module (see eg
 `with-decoded-time-value' to decode)."
   (let ((retval (make-hash-table :test 'equal)))
-    (elisp-cache-walk-dir
+    (elisp-cache/walk-dir
      dirname
      (lambda (maindir subpath hashtable)
        (if (string-match "\\.elc?$" subpath)
@@ -139,6 +145,24 @@ table are timestamps as produced by the `time-date' module (see eg
      retval)
     retval))
 
+
+(defun elisp-cache/setcopy-changedp (symbol value)
+  "Sets SYMBOL's value to a copy of VALUE; returns true if the value changed."
+  (if (equal (symbol-value symbol) value)
+      nil
+    (set symbol (copy-tree value))
+    t
+    ))
+
+(defun elisp-cache/replace-prefix (prefix replacewith string)
+  "if PREFIX is a prefix of PATH, replaces it with REPLACEPREFIX.
+
+Returns the replaced string, or nil if no replacement occured."
+  (if (and (>= (length string) (length prefix))
+           (equal prefix (substring string 0 (length prefix))))
+      (concat replacewith (substring string (length prefix)))))
+
+;;;;;;;;;;;;;;;;;;;; Public functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun elisp-cache (fromdir todir)
   "Caches all Elisp files found in FROMDIR into TODIR.
@@ -161,7 +185,7 @@ them (or byte-compiles them)."
          (todir (file-name-as-directory todir))
          (todir-existed (if (file-directory-p todir) t
                           (make-directory todir t) nil))
-         (todir-h (elisp-cache-get-mtimes todir))
+         (todir-h (elisp-cache/get-mtimes todir))
          (oldest-mtime nil)
          (_ (maphash (lambda (path mtime)
                        (if (or (not oldest-mtime)
@@ -176,7 +200,7 @@ them (or byte-compiles them)."
                          (not found-old-file))))
     (if (not skip-sync)
       (lexical-let ((fromdir fromdir) (todir todir)
-                    (fromdir-h (elisp-cache-get-mtimes fromdir)))
+                    (fromdir-h (elisp-cache/get-mtimes fromdir)))
         (maphash (lambda (path mtime)
                    (elisp-cache-sync-one-file fromdir todir path))
                  fromdir-h)
@@ -255,53 +279,50 @@ This does *not* cause a cache sync, unlike `elisp-cache'."
   (elisp-cache-update-load-path))
 
 
-(defvar elisp-cache-update-load-path-memoized nil
-  "Memoization for the previous invocation of `elisp-cache-update-load-path'.
+(defvar elisp-cache/update-load-path-memo nil
+  "Internal variable, don't fiddle with it!
 
-Don't fiddle with this variable!")
+Memoization of the state from the previous invocation of
+`elisp-cache-update-load-path'.")
+
+(defvar elisp-cache/update-load-path-running nil
+  "Internal variable, don't fiddle with it!
+
+True if we are currently inside the `elisp-cache-update-load-path' function.")
 
 (defun elisp-cache-update-load-path ()
   "Modifies `load-path' in place, substituting cached directories.
 
 Directories in the `load-path' that have been redirected (ie subdirectories of
 the \"fromdir\" parameter to `elisp-cache-redirect') are rewritten into the
-corresponding subdirectory in the cache, if it exists."
-  (interactive)
-  (flet ((memoize-my-stuff ()
-             "Remember our inputs into `elisp-cache-update-load-path-memoized'.
-              Returns true iff said inputs did not change since last
-              invocation, meaning that `elisp-cache-update-load-path' has
-              nothing to do.
+corresponding subdirectory in the cache, if it exists.
 
-              We do this under the theory that `equal', being written in C,
-              might be noticeably faster than re-running the mapl in the body of
-              `elisp-cache-update-load-path', doing nothing.  It most likely
-              isn't slower anyway."
-             (let ((to-memoize (list load-path elisp-cache-directories-alist)))
-               (if (equal to-memoize elisp-cache-update-load-path-memoized)
-                   nil
-                 (setq elisp-cache-update-load-path-memoized
-                       (copy-tree to-memoize)))))
-         (replace-prefix (prefix replacewith string)
-             "if PREFIX is a prefix of PATH, replaces it with REPLACEPREFIX.
-              Otherwise, returns nil."
-             (if (and (>= (length string) (length prefix))
-                      (equal prefix (substring string 0 (length prefix))))
-                 (concat replacewith (substring string (length prefix)))))
-         (setcar-to-cache (path-cell)
+This function is idempotent; actually if run twice under the same values of
+`load-path' and `elisp-cache-directories-alist', it will do nothing the second
+time.  Also, this function guards against invoking itself recursively (eg
+because of an autoloaded function)."
+  (interactive)
+  (if (and (not elisp-cache/update-load-path-running)
+           (or (elisp-cache/setcopy-changedp
+                'elisp-cache/update-load-path-memo
+                (list load-path elisp-cache-directories-alist))
+               (interactive-p)))
+      (let ((elisp-cache/update-load-path-running t)
+            (setcar-to-cache (lambda (path-cell)
              "If appropriate, rewrites PATH-CELL's car to point into the cache."
              (let* ((path (expand-file-name (car path-cell)))
                     (cachedpath (some (lambda (mapping)
-                                        (replace-prefix
+                                        (elisp-cache/replace-prefix
                                          (expand-file-name (car mapping))
                                          (expand-file-name (cdr mapping))
                                          path))
                                       elisp-cache-directories-alist)))
                (if (and cachedpath (file-exists-p cachedpath))
-                   (setcar path-cell cachedpath)))))
-    (if (or (interactive-p) (memoize-my-stuff))
-        (progn (mapl 'setcar-to-cache load-path)
-               (memoize-my-stuff)))))
+                   (setcar path-cell cachedpath))))))
+        (mapl setcar-to-cache load-path))))
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;; Side effects ;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defconst elisp-cache-load-functions
   (list 'require 'load-library 'load-file 'load)
