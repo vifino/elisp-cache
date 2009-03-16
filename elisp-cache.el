@@ -114,8 +114,8 @@ pathname with respect to DIRNAME."
   (let ((fullpath (expand-file-name file dir)))
 ;   (message "Examining file or directory %s in dir %s" file dir)
     (cond
-     ((file-symlink-p fullpath) nil)
      ((not (file-directory-p fullpath)) (apply func dir file args))
+     ((file-symlink-p fullpath) nil)
      (t
 ;     (message "Traversing directory %s..." (abbreviate-file-name fullpath))
       (dolist (f (directory-files fullpath))
