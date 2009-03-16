@@ -38,7 +38,12 @@
 ;;            (cachedir "/home/fred/var/elisp-cache"))
 ;;         (setq load-path (append load-path (list cachedir nfsdir)))
 ;;         (require 'elisp-cache)
-;;         (elisp-cache nfsdir cachedir))
+;;         (elisp-cache nfsdir cachedir)
+;;      ;; Or maybe this instead, if the directory contains more than
+;;      ;; Elisp code:
+;;         ; (elisp-cache nfsdir cachedir
+;;         ; '((:filelist "foo.el" "bar/baz.el")))
+;;        )
 ;;      (require 'some-spiffy-corporate-module)
 ;;
 ;;  3. Start Emacs and watch it build the cache.
@@ -67,7 +72,7 @@
 
 ;;;;;;;;;;;;;;;;;;;; Configurable stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defvar elisp-cache-version 1.6
+(defvar elisp-cache-version 1.8
 "Version number for elisp-cache.el, taken from the Subversion revision")
 
 
@@ -108,7 +113,10 @@ this variable, as the cache might misbehave if there is a mixture of .el and
   "Walk recursively through DIRNAME.
 
 Invoke FUNC DIRNAME f ARGS on each file underneath it, where f is the *relative*
-pathname with respect to DIRNAME."
+pathname with respect to DIRNAME.
+
+Symbolic links to files are followed, but not symbolic links to directories
+(which could cause loops)."
   (elisp-cache/do-walk-dir dirname "" func args))
 (defun elisp-cache/do-walk-dir (dir file func args)
   (let ((fullpath (expand-file-name file dir)))
@@ -127,22 +135,27 @@ pathname with respect to DIRNAME."
                                        func args))))))))
 
 
-(defun elisp-cache/get-mtimes (dirname)
+(defun elisp-cache/get-mtimes (dirname &optional filelist)
   "Returns a hash table of mtimes for .el and .elc files under DIRNAME.
 
-DIRNAME is searched recursively for files ending in .el or .elc.  The keys in
-the returned hash table are paths relative to DIRNAME.  The values in the hash
-table are timestamps as produced by the `time-date' module (see eg
+If FILELIST is omitted or nil, DIRNAME is searched recursively for files ending
+in .el or .elc.  If FILELIST is specified, it shall contain a list of pathnames
+relative to DIRNAME; only these files will be examined.
+
+Returns a hash table whose keys are paths relative to DIRNAME and values are
+timestamps as produced by the `time-date' module (see eg
 `with-decoded-time-value' to decode)."
-  (let ((retval (make-hash-table :test 'equal)))
-    (elisp-cache/walk-dir
-     dirname
-     (lambda (maindir subpath hashtable)
-       (if (string-match "\\.elc?$" subpath)
-           (let* ((full-path (expand-file-name subpath maindir))
-                  (mtime (nth 5 (file-attributes full-path))))
-             (puthash subpath mtime hashtable))))
-     retval)
+  (let ((retval (make-hash-table :test 'equal))
+        (add-one-mtime-to-hash
+         (lambda (maindir subpath hashtable)
+           (if (string-match "\\.elc?$" subpath)
+               (let* ((full-path (expand-file-name subpath maindir))
+                      (mtime (nth 5 (file-attributes full-path))))
+                 (puthash subpath mtime hashtable))))))
+    (if filelist
+        (dolist (relpath filelist)
+                (funcall add-one-mtime-to-hash dirname relpath retval))
+      (elisp-cache/walk-dir dirname add-one-mtime-to-hash retval))
     retval))
 
 
@@ -164,7 +177,7 @@ Returns the replaced string, or nil if no replacement occured."
 
 ;;;;;;;;;;;;;;;;;;;; Public functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defun elisp-cache (fromdir todir)
+(defun elisp-cache (fromdir todir &optional kwargs-alist)
   "Caches all Elisp files found in FROMDIR into TODIR.
 
 If TODIR did not exist already, it will be created.  In this case, or if TODIR
@@ -177,6 +190,15 @@ byte-compiling, see `elisp-cache-byte-compile-files') all Elisp files
 into TODIR under the same relative path.  If FROMDIR is unreadable or empty,
 nothing happens, thereby allowing Emacs to start up off a stale cache, which is
 better than not starting at all (eg when on the road with a laptop).
+
+KWARGS-ALIST is an alist of keyword arguments, ie a list of (keyword . value)
+cons cells. Accepted keyword arguments are:
+
+  (:filelist . LIST)
+
+    Specifies the relative pathnames of the .el files to encache under FROMDIR.
+    This saves a costly directory walk eg for that handful of .el files
+    provided as a contrib in a big directory of non-Emacs code.
 
 Note that `elisp-cache' never loads any Elisp files.  It only copies
 them (or byte-compiles them)."
@@ -200,7 +222,8 @@ them (or byte-compiles them)."
                          (not found-old-file))))
     (if (not skip-sync)
       (lexical-let ((fromdir fromdir) (todir todir)
-                    (fromdir-h (elisp-cache/get-mtimes fromdir)))
+                    (fromdir-h (elisp-cache/get-mtimes fromdir
+                                       (cdr (assq :filelist kwargs-alist)))))
         (maphash (lambda (path mtime)
                    (elisp-cache-sync-one-file fromdir todir path))
                  fromdir-h)
