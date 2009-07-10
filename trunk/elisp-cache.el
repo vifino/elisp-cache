@@ -107,6 +107,14 @@ this variable, as the cache might misbehave if there is a mixture of .el and
   :group 'elisp-cache)
 
 
+(defcustom elisp-cache-skip-list '("\\.elc\\'")
+  "Specifies a list of files or directories to skip.
+The elements are regular expressions.  If a directory or file
+matches a regexp from this list, it will be ignored."
+  :type '(repeat string)
+  :group 'elisp-cache)
+
+
 ;;;;;;;;;;;;;;;;;;;; Internal functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (defun elisp-cache/walk-dir (dirname func &rest args)
@@ -116,7 +124,7 @@ Invoke FUNC DIRNAME f ARGS on each file underneath it, where f is the *relative*
 pathname with respect to DIRNAME.
 
 Symbolic links to files are followed, but not symbolic links to directories
-(which could cause loops)."
+\(which could cause loops)."
   (elisp-cache/do-walk-dir dirname "" func args))
 (defun elisp-cache/do-walk-dir (dir file func args)
   (let ((fullpath (expand-file-name file dir)))
@@ -124,6 +132,10 @@ Symbolic links to files are followed, but not symbolic links to directories
     (cond
      ((not (file-directory-p fullpath)) (apply func dir file args))
      ((file-symlink-p fullpath) nil)
+     ((find-if (lambda (regexp)
+                 (string-match regexp fullpath))
+               elisp-cache-skip-list)
+      nil)
      (t
 ;     (message "Traversing directory %s..." (abbreviate-file-name fullpath))
       (dolist (f (directory-files fullpath))
