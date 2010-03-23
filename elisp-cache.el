@@ -87,22 +87,18 @@
   "The maximum time (in minutes) before we check for changes in the file server.
 
 If all .el (or .elc) files in the cache directory are more recent than this many
-hours, then `elisp-cache' will refrain from examining the source directory at
+minutes, then `elisp-cache' will refrain from examining the source directory at
 all.  This allows for a very fast startup most of the time."
   :type 'integer
   :group 'elisp-cache)
 
 
 (defcustom elisp-cache-byte-compile-files nil
-  "If set to true, then create .elc files instead of copying .el files.
+  "If set to true, then create .elc files in addition to copying .el files.
 
 Please be warned that if you set this variable to a true value and use several
 flavors of Emacs, you need to be smart in the invocation of `elisp-cache'
-because .elc files are incompatible between Emacs versions.
-
-Also, you should purge your cache (with \"rm -rf\") after changing the value of
-this variable, as the cache might misbehave if there is a mixture of .el and
-.elc files in it."
+because .elc files are incompatible between Emacs versions."
   :type 'boolean
   :group 'elisp-cache)
 
@@ -253,49 +249,37 @@ them (or byte-compiles them)."
                  todir-h)))
     (elisp-cache-redirect fromdir todir)))
 
-
 (defun elisp-cache-sync-one-file (fromdir todir relpath)
   "Copies the FROMDIR/RELPATH Elisp file into TODIR if needed.
 
-Depending on the setting of `elisp-cache-byte-compile-files', this will either
-create a plain copy or byte-compile the file.  Does nothing if the source file
-is older than the target."
-  ;; We assume that relpath is always going to end in .el; TODO(domq): also deal
-  ;; with a FROMDIR containing .elc files, or even a mixture of .el and .elc
-  ;; files.
+This will create a plain copy of .el and .elc alike, and depending on the
+setting of `elisp-cache-byte-compile-files', maybe byte-compile a .el .  Does
+nothing if the source file is older than the target."
   (let* ((source (expand-file-name relpath fromdir))
-         (target-el (expand-file-name relpath todir))
-         (target-elc (concat target-el "c"))
-         (target-for-mtime (if (file-exists-p target-elc) target-elc target-el))
-         (message (format "elisp-cache: %s %s to %s"
-                          (if elisp-cache-byte-compile-files
-                              "byte-compiling" "copying")
-                          source
-                          (if elisp-cache-byte-compile-files
-                              target-el target-elc))))
-    (cond ((file-newer-than-file-p source target-for-mtime)
-           (message message)
-           (make-directory (file-name-directory target-el) t)
-           (if (file-exists-p target-el) (delete-file target-el))
-           (if (file-exists-p target-elc) (delete-file target-elc))
-           (if (and
-                elisp-cache-byte-compile-files
+         (target (expand-file-name relpath todir))
+         (target-elc (and elisp-cache-byte-compile-files
+                          (string-equal "el" (file-name-extension target))
+                          (concat target "c"))))
+    (if (file-newer-than-file-p source target)
+        ;; Copy the .el file, even with elisp-cache-byte-compile-files: it
+        ;; will come in handy if the compile fails, and also for
+        ;; `find-function' (eg to navigate to source from the Emacs help).
+        (progn
+          (make-directory (file-name-directory target) t)
+          (if (file-exists-p target) (delete-file target))
+          (message "elisp-cache: copying %s to %s" source target)
+          (copy-file source target)
+          (if target-elc
+              (progn
+                (if (file-exists-p target-elc) (delete-file target-elc))
+                (message "elisp-cache: byte-compiling %s to %s"
+                         source target-elc)
                 (condition-case nil
                     (lexical-let ((target-elc target-elc))
                       (flet ((byte-compile-dest-file (unused) target-elc))
-                        (byte-compile-file source)
-                        t))
-                  (error nil))  ;; FWIW, only XEmacs appears to throw exceptions
-                                ;; from byte-compile-file, so we must also test
-                                ;; that the file actually got created:
-                (file-exists-p target-elc))
-               t ;; Byte-compile successful, job done
-             ;; Copy the .el file in all other cases: that is, the user asked
-             ;; for no .elc, *or* the compilation failed.  In the latter case,
-             ;; this will at least allow the sync to proceed to completion (and
-             ;; in so doing, actually create a cached version no less useful
-             ;; than the original) instead of frustrating the user.
-             (copy-file source target-el))))))
+                        (byte-compile-file source)))
+                  (error nil))))))))  ;; FWIW, only XEmacs appears to throw
+                                      ;; exceptions from byte-compile-file.
 
 
 (defvar elisp-cache-directories-alist nil
