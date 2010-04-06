@@ -110,6 +110,13 @@ matches a regexp from this list, it will be ignored."
   :type '(repeat string)
   :group 'elisp-cache)
 
+(defcustom elisp-cache-symlink-sources nil
+  "Instead of copying .el source files, make symbolic links.
+
+This has no effect unless `elisp-cache-byte-compile-files' is also set."
+  :type '(boolean)
+  :group 'elisp-cache)
+
 
 ;;;;;;;;;;;;;;;;;;;; Internal functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -252,34 +259,37 @@ them (or byte-compiles them)."
 (defun elisp-cache-sync-one-file (fromdir todir relpath)
   "Copies the FROMDIR/RELPATH Elisp file into TODIR if needed.
 
-This will create a plain copy of .el and .elc alike, and depending on the
-setting of `elisp-cache-byte-compile-files', maybe byte-compile a .el .  Does
-nothing if the source file is older than the target."
+If RELPATH is a .el file, it will be copied or symlinked into TODIR and/or
+byte-compiled, depending on the values of `elisp-cache-symlink-sources' and
+`elisp-cache-byte-compile-files'.  Otherwise, the file (.elc or anything else)
+simply gets copied.  Does nothing if the source file is older than the target."
   (let* ((source (expand-file-name relpath fromdir))
          (target (expand-file-name relpath todir))
-         (target-elc (and elisp-cache-byte-compile-files
-                          (string-equal "el" (file-name-extension target))
-                          (concat target "c"))))
-    (if (file-newer-than-file-p source target)
-        ;; Copy the .el file, even with elisp-cache-byte-compile-files: it
-        ;; will come in handy if the compile fails, and also for
-        ;; `find-function' (eg to navigate to source from the Emacs help).
-        (progn
-          (make-directory (file-name-directory target) t)
-          (if (file-exists-p target) (delete-file target))
-          (message "elisp-cache: copying %s to %s" source target)
-          (copy-file source target)
-          (if target-elc
-              (progn
-                (if (file-exists-p target-elc) (delete-file target-elc))
-                (message "elisp-cache: byte-compiling %s to %s"
-                         source target-elc)
-                (condition-case nil
-                    (lexical-let ((target-elc target-elc))
-                      (flet ((byte-compile-dest-file (unused) target-elc))
-                        (byte-compile-file source)))
-                  (error nil))))))))  ;; FWIW, only XEmacs appears to throw
-                                      ;; exceptions from byte-compile-file.
+         (is-el (string-equal "el" (file-name-extension target)))
+         (target-elc (and elisp-cache-byte-compile-files is-el
+                          (concat target "c")))
+         (target-for-date-comparison
+	  (if (and target-elc (file-exists-p target-elc)) target-elc target))
+	 compile-success)
+    (when (file-newer-than-file-p source target-for-date-comparison)
+      (make-directory (file-name-directory target) t)
+      (if (file-exists-p target) (delete-file target))
+      (when target-elc
+	(if (file-exists-p target-elc) (delete-file target-elc))
+	(message "elisp-cache: byte-compiling %s to %s" source target-elc)
+	(setq compile-success (condition-case nil
+		(lexical-let ((target-elc target-elc))
+		  (flet ((byte-compile-dest-file (unused) target-elc))
+		    (byte-compile-file source)))
+		(error nil))))  ;; FWIW, only XEmacs appears to throw
+                                ;; exceptions from byte-compile-file.
+      ;; Now copy (or symlink) the source.  If the compile failed, force a copy
+      ;; so that the user gets at least *something* that can work off-line.
+      (if (and compile-success elisp-cache-symlink-sources)
+	  (progn (message "elisp-cache: symlinking %s to %s" source target)
+		 (make-symbolic-link source target))
+	(message "elisp-cache: copying %s to %s" source target)
+	(copy-file source target)))))
 
 
 (defvar elisp-cache-directories-alist nil
