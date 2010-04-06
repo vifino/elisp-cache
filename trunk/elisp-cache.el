@@ -59,11 +59,6 @@
 ;; If you don't want to wait, ever, then arrange for a crontab to start Emacs in
 ;; batch mode, eg as "emacs --batch -l ~/.emacs".  Schedule that every
 ;; `elisp-cache-freshness-delay' minutes or less.
-;;
-;; Known problems (patches welcome):
-;;
-;;  * Does not work if the file server contains .elc files (only .el files are
-;;    supported).
 
 (require 'cl)
 (require 'time-date)
