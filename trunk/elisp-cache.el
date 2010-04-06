@@ -115,19 +115,20 @@ This has no effect unless `elisp-cache-byte-compile-files' is also set."
 
 ;;;;;;;;;;;;;;;;;;;; Internal functions ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defun elisp-cache/walk-dir (dirname func &rest args)
+(defun elisp-cache/walk-dir (dirname follow-p func &rest args)
   "Walk recursively through DIRNAME.
 
 Invoke FUNC DIRNAME f ARGS on each file underneath it, where f is the *relative*
 pathname with respect to DIRNAME.
 
-Symbolic links to files are followed, but not symbolic links to directories
-\(which could cause loops)."
-  (elisp-cache/do-walk-dir dirname "" func args))
-(defun elisp-cache/do-walk-dir (dir file func args)
+Symbolic links to files are followed if follow-p is non-nil; symbolic links to
+directories are never followed (so as not to loop)."
+  (elisp-cache/do-walk-dir dirname "" follow-p func args))
+(defun elisp-cache/do-walk-dir (dir file follow-p func args)
   (let ((fullpath (expand-file-name file dir)))
 ;   (message "Examining file or directory %s in dir %s" file dir)
     (cond
+     ((and (not follow-p) (file-symlink-p fullpath)) nil)
      ((not (file-directory-p fullpath)) (apply func dir file args))
      ((file-symlink-p fullpath) nil)
      ((find-if (lambda (regexp)
@@ -141,16 +142,18 @@ Symbolic links to files are followed, but not symbolic links to directories
             (let* ((subdir (if (string-equal file "") ""
                              (file-name-as-directory file)))
                    (subpath (concat subdir f)))
-              (elisp-cache/do-walk-dir dir subpath
+              (elisp-cache/do-walk-dir dir subpath follow-p
                                        func args))))))))
 
 
-(defun elisp-cache/get-mtimes (dirname &optional filelist)
+(defun elisp-cache/get-mtimes (dirname follow-p &optional filelist)
   "Returns a hash table of mtimes for .el and .elc files under DIRNAME.
 
 If FILELIST is omitted or nil, DIRNAME is searched recursively for files ending
 in .el or .elc.  If FILELIST is specified, it shall contain a list of pathnames
 relative to DIRNAME; only these files will be examined.
+
+FOLLOW-P is passed as is to `elisp-cache/walk-dir'.
 
 Returns a hash table whose keys are paths relative to DIRNAME and values are
 timestamps as produced by the `time-date' module (see eg
@@ -165,7 +168,7 @@ timestamps as produced by the `time-date' module (see eg
     (if filelist
         (dolist (relpath filelist)
                 (funcall add-one-mtime-to-hash dirname relpath retval))
-      (elisp-cache/walk-dir dirname add-one-mtime-to-hash retval))
+      (elisp-cache/walk-dir dirname follow-p add-one-mtime-to-hash retval))
     retval))
 
 
@@ -217,7 +220,7 @@ them (or byte-compiles them)."
          (todir (file-name-as-directory todir))
          (todir-existed (if (file-directory-p todir) t
                           (make-directory todir t) nil))
-         (todir-h (elisp-cache/get-mtimes todir))
+         (todir-h (elisp-cache/get-mtimes todir nil))
          (oldest-mtime nil)
          (_ (maphash (lambda (path mtime)
                        (if (or (not oldest-mtime)
@@ -232,7 +235,7 @@ them (or byte-compiles them)."
                          (not found-old-file))))
     (if (not skip-sync)
       (lexical-let ((fromdir fromdir) (todir todir)
-                    (fromdir-h (elisp-cache/get-mtimes fromdir
+                    (fromdir-h (elisp-cache/get-mtimes fromdir t
                                        (cdr (assq :filelist kwargs-alist)))))
         (maphash (lambda (path mtime)
                    (elisp-cache-sync-one-file fromdir todir path))
