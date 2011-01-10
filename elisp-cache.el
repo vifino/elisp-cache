@@ -30,7 +30,8 @@
 ;;
 ;; To use this module:
 ;;
-;;  1. Choose a local directory to store the cache
+;;  1. Create a local directory to store the cache (elisp-cache.el won't mkdir
+;;     it for you)
 ;;
 ;;  2. Add something like this to your ~/.emacs:
 ;;
@@ -267,27 +268,27 @@ simply gets copied.  Does nothing if the source file is older than the target."
          (target-elc (and elisp-cache-byte-compile-files is-el
                           (concat target "c")))
          (target-for-date-comparison
-	  (if (and target-elc (file-exists-p target-elc)) target-elc target))
-	 compile-success)
+          (if (and target-elc (file-exists-p target-elc)) target-elc target))
+         compile-success)
     (when (file-newer-than-file-p source target-for-date-comparison)
       (make-directory (file-name-directory target) t)
       (if (file-exists-p target) (delete-file target))
       (when target-elc
-	(if (file-exists-p target-elc) (delete-file target-elc))
-	(message "elisp-cache: byte-compiling %s to %s" source target-elc)
-	(setq compile-success (condition-case nil
-		(lexical-let ((target-elc target-elc))
-		  (flet ((byte-compile-dest-file (unused) target-elc))
-		    (byte-compile-file source)))
-		(error nil))))  ;; FWIW, only XEmacs appears to throw
+        (if (file-exists-p target-elc) (delete-file target-elc))
+        (message "elisp-cache: byte-compiling %s to %s" source target-elc)
+        (setq compile-success (condition-case nil
+                (lexical-let ((target-elc target-elc))
+                  (flet ((byte-compile-dest-file (unused) target-elc))
+                    (byte-compile-file source)))
+                (error nil))))  ;; FWIW, only XEmacs appears to throw
                                 ;; exceptions from byte-compile-file.
       ;; Now copy (or symlink) the source.  If the compile failed, force a copy
       ;; so that the user gets at least *something* that can work off-line.
       (if (and compile-success elisp-cache-symlink-sources)
-	  (progn (message "elisp-cache: symlinking %s to %s" source target)
-		 (make-symbolic-link source target))
-	(message "elisp-cache: copying %s to %s" source target)
-	(copy-file source target)))))
+          (progn (message "elisp-cache: symlinking %s to %s" source target)
+                 (make-symbolic-link source target))
+        (message "elisp-cache: copying %s to %s" source target)
+        (copy-file source target)))))
 
 
 (defvar elisp-cache-directories-alist nil
