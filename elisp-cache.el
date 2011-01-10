@@ -68,7 +68,7 @@
 
 ;;;;;;;;;;;;;;;;;;;; Configurable stuff ;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(defvar elisp-cache-version 1.8
+(defvar elisp-cache-version 1.15
 "Version number for elisp-cache.el, taken from the Subversion revision")
 
 
