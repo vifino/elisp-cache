@@ -146,33 +146,6 @@ directories are never followed (so as not to loop)."
               (elisp-cache/do-walk-dir dir subpath follow-p
                                        func args))))))))
 
-
-(defun elisp-cache/get-mtimes (dirname follow-p &optional filelist)
-  "Returns a hash table of mtimes for .el and .elc files under DIRNAME.
-
-If FILELIST is omitted or nil, DIRNAME is searched recursively for files ending
-in .el or .elc.  If FILELIST is specified, it shall contain a list of pathnames
-relative to DIRNAME; only these files will be examined.
-
-FOLLOW-P is passed as is to `elisp-cache/walk-dir'.
-
-Returns a hash table whose keys are paths relative to DIRNAME and values are
-timestamps as produced by the `time-date' module (see eg
-`with-decoded-time-value' to decode)."
-  (let ((retval (make-hash-table :test 'equal))
-        (add-one-mtime-to-hash
-         (lambda (maindir subpath hashtable)
-           (if (string-match "\\.elc?$" subpath)
-               (let* ((full-path (expand-file-name subpath maindir))
-                      (mtime (nth 5 (file-attributes full-path))))
-                 (puthash subpath mtime hashtable))))))
-    (if filelist
-        (dolist (relpath filelist)
-                (funcall add-one-mtime-to-hash dirname relpath retval))
-      (elisp-cache/walk-dir dirname follow-p add-one-mtime-to-hash retval))
-    retval))
-
-
 (defun elisp-cache/setcopy-changedp (symbol value)
   "Sets SYMBOL's value to a copy of VALUE; returns true if the value changed."
   (if (equal (symbol-value symbol) value)
@@ -217,42 +190,41 @@ cons cells. Accepted keyword arguments are:
 Note that `elisp-cache' never loads any Elisp files.  It only copies
 them (or byte-compiles them)."
   (interactive "DCache startup files from:\nDCache startup files from: %s to: ")
-  (let* ((fromdir (file-name-as-directory fromdir))
-         (todir (file-name-as-directory todir))
-         (todir-existed (if (file-directory-p todir) t
-                          (make-directory todir t) nil))
-         (todir-h (elisp-cache/get-mtimes todir nil))
-         (oldest-mtime nil)
-         (_ (maphash (lambda (path mtime)
-                       (if (or (not oldest-mtime)
-                               (time-less-p mtime oldest-mtime))
-                           (setq oldest-mtime mtime)))
-                     todir-h))
-         (found-old-file
-          (and oldest-mtime
-               (> (/ (time-to-seconds (time-since oldest-mtime)) 60.0)
-                  elisp-cache-freshness-delay)))
-         (skip-sync (and oldest-mtime ;; Ie don't skip sync on empty cache
-                         (not found-old-file))))
-    (if (not skip-sync)
-      (lexical-let ((fromdir fromdir) (todir todir)
-                    (fromdir-h (elisp-cache/get-mtimes fromdir t
-                                       (cdr (assq :filelist kwargs-alist)))))
-        (maphash (lambda (path mtime)
-                   (elisp-cache-sync-one-file fromdir todir path))
-                 fromdir-h)
-        ;; Also a cleanup pass for orphaned files in the cache
-        (maphash (lambda (path mtime)
-                   (let* ((el-path (progn
-                                     (string-match "^\\(.*\\.el\\)c?$" path)
-                                     (match-string 1 path)))
-                          (other-path
-                           (if (equal el-path path) (concat path "c")
-                             el-path)))
-                     (if (and (not (gethash path fromdir-h))
-                              (not (gethash other-path fromdir-h)))
-                         (delete-file (expand-file-name path todir)))))
-                 todir-h)))
+  (let*
+      ((fromdir (file-name-as-directory fromdir))
+       (todir (file-name-as-directory todir))
+       (_ (unless (file-directory-p todir) (make-directory todir t)))
+       (stamp-file (concat todir ".elisp-cache-stamp"))
+       (last-sync-time (nth 5 (file-attributes stamp-file)))
+       (files-to-sync (cdr (assq :filelist kwargs-alist))))
+    (cond
+     ((and last-sync-time
+           (< (/ (time-to-seconds (time-since last-sync-time)) 60.0)
+              elisp-cache-freshness-delay)) nil)  ;; Skip sync: cache is fresh
+     ((not (file-directory-p fromdir)) nil)
+     (t  ;; Do sync
+      (unless files-to-sync
+        (let (endptr)  ;; Will point to last cons cell of files-to-sync
+          (elisp-cache/walk-dir fromdir t
+              (lambda (_ f)
+                (when (string-match "\\.elc?$" f)
+                  (setq endptr (if endptr
+                                   (setcdr endptr (cons f nil))
+                                 (set 'files-to-sync (cons f nil)))))))))
+      (dolist (path files-to-sync)
+        (elisp-cache-sync-one-file fromdir todir path))
+      ;; Also a cleanup pass for orphaned files in the cache
+      (elisp-cache/walk-dir todir t
+          (lambda (_ path)
+            (let ((el-path (and
+                            (string-match "^\\(.*\\.el\\)c?$" path)
+                            (match-string 1 path))))
+              (unless (and el-path
+                           (or (member el-path files-to-sync)
+                               (member (concat el-path "c") files-to-sync)))
+                (delete-file (expand-file-name path todir))))))
+      ;; (Re)create timestamp
+      (write-region "" nil stamp-file)))
     (elisp-cache-redirect fromdir todir)))
 
 (defun elisp-cache-sync-one-file (fromdir todir relpath)
