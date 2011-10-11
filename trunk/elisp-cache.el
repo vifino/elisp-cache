@@ -1,4 +1,4 @@
-;;; elisp-cache.el -- Faster emacs startup through byte-compiling.
+;;; elisp-cache.el --- Faster emacs startup through byte-compiling.
 ;; Copyright 2008 Google Inc.
 ;;
 ;; This program is free software; you can redistribute it and/or modify it under
