@@ -230,6 +230,22 @@ them (or byte-compiles them)."
       (write-region "" nil stamp-file)))
     (elisp-cache-redirect fromdir todir)))
 
+(defun elisp-cache-byte-compile-one-file (source destination)
+  "Byte-compiles SOURCES to DESTINATION.
+
+This is a separate function so that it can be advised, eg to tweak LOAD-PATH
+so as to smash spurious warnings.
+
+Returns t if the compilation was a success, nil otherwise (instead of throwing
+an exception like XEmacs' vanilla `byte-compile-file').  Doesn't load the
+file into Emacs once done."
+  (condition-case nil
+      (lexical-let ((destination destination))
+        (flet ((byte-compile-dest-file (unused) destination))
+          (byte-compile-file source)))
+    (error nil)))  ;; FWIW, only XEmacs appears to throw
+                   ;; exceptions from byte-compile-file.
+
 (defun elisp-cache-sync-one-file (fromdir todir relpath)
   "Copies the FROMDIR/RELPATH Elisp file into TODIR if needed.
 
@@ -249,14 +265,10 @@ simply gets copied.  Does nothing if the source file is older than the target."
       (make-directory (file-name-directory target) t)
       (if (file-exists-p target) (delete-file target))
       (when target-elc
-        (if (file-exists-p target-elc) (delete-file target-elc))
         (message "elisp-cache: byte-compiling %s to %s" source target-elc)
-        (setq compile-success (condition-case nil
-                (lexical-let ((target-elc target-elc))
-                  (flet ((byte-compile-dest-file (unused) target-elc))
-                    (byte-compile-file source)))
-                (error nil))))  ;; FWIW, only XEmacs appears to throw
-                                ;; exceptions from byte-compile-file.
+        (if (file-exists-p target-elc) (delete-file target-elc))
+        (setq compile-success 
+              (elisp-cache-byte-compile-one-file source target-elc)))
       ;; Now copy (or symlink) the source.  If the compile failed, force a copy
       ;; so that the user gets at least *something* that can work off-line.
       (if (and compile-success elisp-cache-symlink-sources)
